@@ -1,3 +1,4 @@
 default-jdk
 libxml2-dev
 libxslt1-dev
+libqpdf-dev
