@@ -5,9 +5,14 @@ from os.path import isfile, join
 import json
 import pandas as pd
 
-from pdf_statement_reader.decrypt import decrypt_pdf
 from pdf_statement_reader.parse import parse_statement
-from pdf_statement_reader.validate import validate_statement
+
+try:
+    from pdf_statement_reader.decrypt import decrypt_pdf
+    from pdf_statement_reader.validate import validate_statement
+except ImportError:
+    decrypt_pdf = None
+    validate_statement = None
 
 
 def load_config(config_spec):

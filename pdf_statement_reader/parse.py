@@ -1,5 +1,5 @@
 from tabula import read_pdf
-from pikepdf import Pdf
+import pdfplumber
 import pandas as pd
 import numpy as np
 
@@ -185,8 +185,8 @@ def extract_year_from_pdf(filename):
 
 
 def parse_statement(filename, config):
-    pdf = Pdf.open(filename)
-    num_pages = len(pdf.pages)
+    with pdfplumber.open(filename) as pdf:
+        num_pages = len(pdf.pages)
 
     statement = get_raw_df(filename, num_pages, config)
 

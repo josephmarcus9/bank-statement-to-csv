@@ -1,6 +1,5 @@
 streamlit
 pandas
-pikepdf==8.15.1
 tabula-py
 jpype1
 pdfplumber

@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 
-from pdf_statement_reader.parse import parse_statement
+from pdf_statement_reader.parse import parse_statement  # noqa: direct import to avoid __init__.py loading pikepdf
 
 BANK_CONFIGS = {
     "ABSA": "za.absa.transaction_history",
