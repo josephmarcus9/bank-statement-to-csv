@@ -15,6 +15,11 @@ def get_raw_df(filename, num_pages, config):
             area = config["layout"]["default"]["area"]
             columns = config["layout"]["default"]["columns"]
 
+        no_header = config.get("no_header", False)
+        pandas_opts = {"dtype": str}
+        if no_header:
+            pandas_opts["header"] = None
+
         df = read_pdf(
             filename,
             pages=i + 1,
@@ -22,11 +27,12 @@ def get_raw_df(filename, num_pages, config):
             columns=columns,
             stream=True,
             guess=False,
-            pandas_options={"dtype": str},
+            pandas_options=pandas_opts,
             java_options=[
                 "-Dorg.slf4j.simpleLogger.defaultLogLevel=off",
                 "-Dorg.apache.commons.logging.Log=org.apache.commons.logging.impl.NoOpLog",
             ],
+            force_subprocess=True,
         )
         if df is not None and len(df) > 0:
             dfs.extend(df)
@@ -42,16 +48,76 @@ def format_negatives(s):
         return s
 
 
+def format_cr_dr(s):
+    """Handle FNB-style Cr/Dr suffixes and comma thousands separators.
+
+    - Values ending in 'Cr' are credits (positive)
+    - Plain values are debits (negative)
+    - Commas are stripped (thousands separator)
+    """
+    s = str(s).strip()
+    if s == "nan" or s == "":
+        return s
+    s = s.replace(",", "")
+    if s.endswith("Cr"):
+        return s[:-2]
+    elif s.endswith("Dr"):
+        return "-" + s[:-2]
+    else:
+        return "-" + s
+
+
+def format_r_prefix(s):
+    """Handle ABSA-style R prefix amounts (e.g., R398.00, -R2 105.37)."""
+    s = str(s).strip()
+    if s == "nan" or s == "":
+        return s
+    s = s.replace(" ", "")
+    if s.startswith("-R"):
+        return "-" + s[2:]
+    elif s.startswith("R"):
+        return s[1:]
+    else:
+        return s
+
+
+def format_comma_decimal(s):
+    """Handle SA comma-decimal format (e.g., -55 584,30 → -55584.30)."""
+    s = str(s).strip()
+    if s == "nan" or s == "":
+        return s
+    s = s.replace(" ", "")
+    # Handle +/- prefix
+    if s.startswith("+"):
+        s = s[1:]
+    # Replace comma with dot (decimal separator)
+    s = s.replace(",", ".")
+    return s
+
+
 def clean_numeric(df, config):
     numeric_cols = [config["columns"][col] for col in config["cleaning"]["numeric"]]
+    cr_mode = config["cleaning"].get("cr_suffix", False)
+
+    r_prefix = config["cleaning"].get("r_prefix", False)
+    comma_decimal = config["cleaning"].get("comma_decimal", False)
 
     for col in numeric_cols:
-        df[col] = df[col].apply(format_negatives)
+        if cr_mode:
+            df[col] = df[col].apply(format_cr_dr)
+        elif r_prefix:
+            df[col] = df[col].apply(format_r_prefix)
+        elif comma_decimal:
+            df[col] = df[col].apply(format_comma_decimal)
+        else:
+            df[col] = df[col].apply(format_negatives)
         df[col] = df[col].str.replace(" ", "")
+        if not comma_decimal:
+            df[col] = df[col].str.replace(",", "")
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
 
-def clean_date(df, config):
+def clean_date(df, config, statement_year=None):
     date_cols = [config["columns"][col] for col in config["cleaning"]["date"]]
     if "date_format" in config["cleaning"]:
         date_format = config["cleaning"]["date_format"]
@@ -59,6 +125,12 @@ def clean_date(df, config):
         date_format = None
 
     for col in date_cols:
+        if statement_year and date_format and "%Y" not in date_format and "%y" not in date_format:
+            # Date format has no year component - prepend the year
+            df[col] = df[col].astype(str).apply(
+                lambda x: f"{statement_year} {x}" if x != "nan" else x
+            )
+            date_format = "%Y " + date_format
         df[col] = pd.to_datetime(df[col], errors="coerce", format=date_format)
 
 
@@ -80,9 +152,36 @@ def clean_dropna(df, config):
 
 
 def reorder_columns(df, config):
-    column_mapper = {a: b for a, b in zip(df.columns, config["columns"].values())}
+    if config.get("no_header", False):
+        # Columns are positional (integer-indexed), assign names from config
+        col_names = list(config["columns"].values())
+        # Only rename as many columns as we have in config
+        rename_map = {i: col_names[i] for i in range(min(len(df.columns), len(col_names)))}
+        df = df.rename(columns=rename_map)
+    else:
+        column_mapper = {a: b for a, b in zip(df.columns, config["columns"].values())}
+        df = df.rename(columns=column_mapper)
     ordered_columns = [config["columns"][col] for col in config["order"]]
-    return df.rename(columns=column_mapper)[ordered_columns]
+    return df[ordered_columns]
+
+
+def extract_year_from_pdf(filename):
+    """Try to extract the statement year from PDF text."""
+    import re
+    import pdfplumber
+    with pdfplumber.open(filename) as pdf:
+        text = pdf.pages[0].extract_text() or ""
+    # Look for patterns like "31 December 2025" or "2026/01/31" or "January 2026"
+    match = re.search(r"(\d{4})/\d{2}/\d{2}", text)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\d{1,2}\s+\w+\s+(\d{4})", text)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"\w+\s+(\d{4})", text)
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def parse_statement(filename, config):
@@ -91,13 +190,23 @@ def parse_statement(filename, config):
 
     statement = get_raw_df(filename, num_pages, config)
 
+    # For no_header configs, rename columns first so cleaning can find them by name
+    if config.get("no_header", False) and "order" in config:
+        statement = reorder_columns(statement, config)
+
     if "numeric" in config["cleaning"]:
         clean_numeric(statement, config)
 
+    # Extract year for date formats without year
+    statement_year = None
     if "date" in config["cleaning"]:
-        clean_date(statement, config)
+        date_format = config["cleaning"].get("date_format", "")
+        if "%Y" not in date_format and "%y" not in date_format:
+            statement_year = extract_year_from_pdf(filename)
+        clean_date(statement, config, statement_year)
 
-    if "order" in config:
+    # For header-based configs, reorder after cleaning
+    if not config.get("no_header", False) and "order" in config:
         statement = reorder_columns(statement, config)
 
     if "trans_detail" in config["cleaning"]:

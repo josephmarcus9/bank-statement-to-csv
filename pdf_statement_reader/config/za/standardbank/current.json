@@ -1,0 +1,37 @@
+{
+    "$schema": "https://raw.githubusercontent.com/marlanperumal/pdf_statement_reader/develop/pdf_statement_reader/config/psr_config.schema.json",
+    "no_header": true,
+    "layout": {
+        "default": {
+            "area": [230, 45, 760, 550],
+            "columns": [95, 310, 360, 425, 490, 550]
+        },
+        "first": {
+            "area": [230, 45, 760, 550],
+            "columns": [95, 310, 360, 425, 490, 550]
+        }
+    },
+    "columns": {
+        "trans_date": "Date",
+        "trans_type": "Reference",
+        "credit": "In (R)",
+        "debit": "Out (R)",
+        "bank_fee": "Bank fees (R)",
+        "balance": "Balance (R)"
+    },
+    "order": [
+        "trans_date",
+        "trans_type",
+        "credit",
+        "debit",
+        "bank_fee",
+        "balance"
+    ],
+    "cleaning": {
+        "numeric": ["credit", "debit", "bank_fee", "balance"],
+        "comma_decimal": true,
+        "date": ["trans_date"],
+        "date_format": "%d %b %Y",
+        "dropna": ["balance"]
+    }
+}

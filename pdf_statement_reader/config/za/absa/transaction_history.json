@@ -1,0 +1,33 @@
+{
+    "$schema": "https://raw.githubusercontent.com/marlanperumal/pdf_statement_reader/develop/pdf_statement_reader/config/psr_config.schema.json",
+    "no_header": true,
+    "layout": {
+        "default": {
+            "area": [115, 18, 750, 515],
+            "columns": [70, 350, 405, 515]
+        },
+        "first": {
+            "area": [318, 18, 750, 515],
+            "columns": [70, 350, 405, 515]
+        }
+    },
+    "columns": {
+        "trans_date": "Date",
+        "trans_type": "Transaction Description",
+        "debit": "Amount",
+        "balance": "Balance"
+    },
+    "order": [
+        "trans_date",
+        "trans_type",
+        "debit",
+        "balance"
+    ],
+    "cleaning": {
+        "numeric": ["debit", "balance"],
+        "r_prefix": true,
+        "date": ["trans_date"],
+        "date_format": "%Y-%m-%d",
+        "dropna": ["balance"]
+    }
+}

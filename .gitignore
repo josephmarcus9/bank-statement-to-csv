@@ -111,3 +111,10 @@ venv.bak/
 *.ipynb
 
 !pdf_statement_reader/config/**/*.json
+!requirements.txt
+
+# JVM crash logs
+hs_err_pid*.log
+
+# Data directory
+data/
