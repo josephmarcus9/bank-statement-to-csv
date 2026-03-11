@@ -146,6 +146,39 @@ def clean_trans_detail(df, config):
             df.loc[i - 1, trans_detail] = row[trans_type]
 
 
+def _clean_standardbank_description(desc):
+    """Clean up Standard Bank descriptions.
+
+    Standard Bank PDFs have descriptions in the format:
+        "[Reference] - [Transaction Type] [Reference]"
+    where the reference (account number, payee name) appears before the dash
+    and again after the transaction type. This keeps the full transaction type
+    with the reference appearing once (after the type), removing the leading
+    duplicate and the " - " separator.
+
+    Examples:
+        "G J Rubenstein George loan acc - IB PAYMENT TO G J Rubenstein George loan acc"
+        → "IB PAYMENT TO G J Rubenstein George loan acc"
+
+        "ACC 022517480 - SERVICE FEE ACC 022517480"
+        → "SERVICE FEE ACC 022517480"
+    """
+    if not desc:
+        return desc
+
+    if " - " in desc:
+        parts = desc.split(" - ", 1)
+        reference = parts[0].strip()
+        remainder = parts[1].strip()
+
+        # The remainder typically includes the reference already, so just
+        # return the part after " - " which has the full description
+        if remainder:
+            return remainder
+
+    return desc
+
+
 def parse_with_pdfplumber(filename, config):
     """Parse PDFs using pdfplumber word positions and y-proximity grouping.
 
@@ -234,7 +267,7 @@ def parse_with_pdfplumber(filename, config):
                 desc_parts = [n[1] for n in nearby]
                 if ref:
                     desc_parts.append(ref)
-                description = " ".join(desc_parts)
+                description = _clean_standardbank_description(" ".join(desc_parts))
 
                 in_val = parse_amt(inv)
                 out_val = parse_amt(outv)
