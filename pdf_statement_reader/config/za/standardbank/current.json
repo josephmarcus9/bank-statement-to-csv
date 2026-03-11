@@ -30,6 +30,7 @@
     "cleaning": {
         "numeric": ["credit", "debit", "bank_fee", "balance"],
         "comma_decimal": true,
+        "merge_wrapped": true,
         "date": ["trans_date"],
         "date_format": "%d %b %Y",
         "dropna": ["balance"]

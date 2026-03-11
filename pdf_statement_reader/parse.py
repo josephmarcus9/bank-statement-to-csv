@@ -146,6 +146,62 @@ def clean_trans_detail(df, config):
             df.loc[i - 1, trans_detail] = row[trans_type]
 
 
+def merge_wrapped_descriptions(df, config):
+    """Merge multi-line descriptions into the balance row for each transaction.
+
+    Standard Bank pattern: each transaction consists of:
+    - CONT lines above (description, no balance, no date) → belong to the NEXT balance row
+    - A FULL row (has balance, may have date and/or description)
+    - CONT lines below (continuation of same transaction, no balance) → also belong to this balance row
+
+    The grouping is: collect all non-balance rows between consecutive balance rows,
+    then assign them to the balance row that follows them.
+    """
+    desc_col = config["columns"]["trans_type"]
+    balance_col = config["columns"]["balance"]
+
+    # Find all balance row positions
+    balance_positions = []
+    for i in range(len(df)):
+        val = df.iloc[i][balance_col]
+        if pd.notna(val) and str(val).strip() not in ("", "nan"):
+            balance_positions.append(i)
+
+    if not balance_positions:
+        return
+
+    rows_to_drop = set()
+
+    for pos, bal_idx in enumerate(balance_positions):
+        # Non-balance rows between previous balance row and this one belong to THIS transaction
+        if pos == 0:
+            start = 0
+        else:
+            start = balance_positions[pos - 1] + 1
+
+        fragments = []
+        for i in range(start, bal_idx):
+            desc = df.iloc[i][desc_col]
+            if pd.notna(desc) and str(desc).strip():
+                fragments.append(str(desc).strip())
+            rows_to_drop.add(df.index[i])
+
+        # Include the balance row's own description
+        bal_desc = df.iloc[bal_idx][desc_col]
+        if pd.notna(bal_desc) and str(bal_desc).strip():
+            fragments.append(str(bal_desc).strip())
+
+        if fragments:
+            df.at[df.index[bal_idx], desc_col] = " ".join(fragments)
+
+    # Drop trailing non-balance rows after the last balance row
+    if balance_positions:
+        for i in range(balance_positions[-1] + 1, len(df)):
+            rows_to_drop.add(df.index[i])
+
+    df.drop(list(rows_to_drop), inplace=True)
+
+
 def clean_dropna(df, config):
     drop_cols = [config["columns"][col] for col in config["cleaning"]["dropna"]]
     df.dropna(subset=drop_cols, inplace=True)
@@ -208,6 +264,9 @@ def parse_statement(filename, config):
     # For header-based configs, reorder after cleaning
     if not config.get("no_header", False) and "order" in config:
         statement = reorder_columns(statement, config)
+
+    if config["cleaning"].get("merge_wrapped"):
+        merge_wrapped_descriptions(statement, config)
 
     if "trans_detail" in config["cleaning"]:
         clean_trans_detail(statement, config)
