@@ -146,6 +146,118 @@ def clean_trans_detail(df, config):
             df.loc[i - 1, trans_detail] = row[trans_type]
 
 
+def parse_with_pdfplumber(filename, config):
+    """Parse PDFs using pdfplumber word positions and y-proximity grouping.
+
+    Used for Standard Bank where descriptions wrap across rows and tabula
+    can't correctly group them. Assigns description text to the nearest
+    balance row within 12pt.
+    """
+    from collections import defaultdict
+
+    col_bounds = config.get("pdfplumber_columns", {})
+    date_max = col_bounds.get("date_max", 95)
+    ref_min = col_bounds.get("ref_min", 95)
+    ref_max = col_bounds.get("ref_max", 310)
+    in_min = col_bounds.get("in_min", 310)
+    in_max = col_bounds.get("in_max", 370)
+    out_min = col_bounds.get("out_min", 370)
+    out_max = col_bounds.get("out_max", 440)
+    bal_min = col_bounds.get("bal_min", 500)
+    table_top = col_bounds.get("table_top", 220)
+    table_bottom = col_bounds.get("table_bottom", 760)
+    proximity = col_bounds.get("proximity", 12)
+
+    date_format = config["cleaning"].get("date_format", "%d %b %Y")
+    comma_decimal = config["cleaning"].get("comma_decimal", False)
+
+    def parse_amt(s):
+        if not s:
+            return None
+        s = s.replace(" ", "")
+        if comma_decimal:
+            if s.startswith("+"):
+                s = s[1:]
+            s = s.replace(",", ".")
+        else:
+            s = s.replace(",", "")
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            return None
+
+    all_transactions = []
+
+    with pdfplumber.open(filename) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words(x_tolerance=3, y_tolerance=3)
+
+            rows = defaultdict(list)
+            for w in words:
+                row_key = round(w['top'] * 2) / 2
+                rows[row_key].append(w)
+
+            classified = []
+            for y in sorted(rows.keys()):
+                if y < table_top or y > table_bottom:
+                    continue
+                rw = sorted(rows[y], key=lambda w: w['x0'])
+
+                dt = " ".join(w['text'] for w in rw if w['x1'] < date_max).strip()
+                ref = " ".join(w['text'] for w in rw if ref_min <= w['x0'] and w['x1'] < ref_max).strip()
+                inv = " ".join(w['text'] for w in rw if in_min <= w['x0'] and w['x1'] < in_max).strip()
+                outv = " ".join(w['text'] for w in rw if out_min <= w['x0'] and w['x1'] < out_max).strip()
+                bal = " ".join(w['text'] for w in rw if w['x0'] >= bal_min).strip()
+
+                if dt in ("Date",) or ref in ("Reference",):
+                    continue
+                if any(w['text'] in ('#', '##', 'Please', 'Customer', 'Website', 'The') for w in rw):
+                    continue
+                if not (ref or inv or outv or bal):
+                    continue
+
+                has_bal = bool(bal) and any(c.isdigit() for c in bal)
+                classified.append((y, has_bal, dt, ref, inv, outv, bal))
+
+            for i, (y, is_bal, dt, ref, inv, outv, bal) in enumerate(classified):
+                if not is_bal:
+                    continue
+
+                nearby = []
+                for j, (y2, is_bal2, _, ref2, _, _, _) in enumerate(classified):
+                    if is_bal2 or not ref2:
+                        continue
+                    if abs(y - y2) < proximity:
+                        nearby.append((y2, ref2))
+
+                nearby.sort(key=lambda x: x[0])
+                desc_parts = [n[1] for n in nearby]
+                if ref:
+                    desc_parts.append(ref)
+                description = " ".join(desc_parts)
+
+                in_val = parse_amt(inv)
+                out_val = parse_amt(outv)
+                bal_val = parse_amt(bal)
+                amount = (in_val or 0) + (out_val or 0)
+
+                date_val = None
+                if dt:
+                    try:
+                        date_val = pd.to_datetime(dt, format=date_format)
+                    except (ValueError, TypeError):
+                        pass
+
+                all_transactions.append({
+                    "Date": date_val,
+                    "Description": description,
+                    "Amount": amount,
+                    "Balance": bal_val,
+                })
+
+    return pd.DataFrame(all_transactions)
+
+
 def merge_wrapped_descriptions(df, config):
     """Merge multi-line descriptions into the balance row for each transaction.
 
@@ -241,6 +353,10 @@ def extract_year_from_pdf(filename):
 
 
 def parse_statement(filename, config):
+    # Use pdfplumber-based parser for banks that need y-proximity grouping
+    if config.get("use_pdfplumber"):
+        return parse_with_pdfplumber(filename, config)
+
     with pdfplumber.open(filename) as pdf:
         num_pages = len(pdf.pages)
 

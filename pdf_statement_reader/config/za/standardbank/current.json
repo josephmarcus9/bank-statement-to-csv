@@ -1,38 +1,33 @@
 {
     "$schema": "https://raw.githubusercontent.com/marlanperumal/pdf_statement_reader/develop/pdf_statement_reader/config/psr_config.schema.json",
-    "no_header": true,
-    "layout": {
-        "default": {
-            "area": [230, 45, 760, 550],
-            "columns": [95, 310, 360, 425, 490, 550]
-        },
-        "first": {
-            "area": [230, 45, 760, 550],
-            "columns": [95, 310, 360, 425, 490, 550]
-        }
+    "use_pdfplumber": true,
+    "pdfplumber_columns": {
+        "date_max": 95,
+        "ref_min": 95,
+        "ref_max": 310,
+        "in_min": 310,
+        "in_max": 370,
+        "out_min": 370,
+        "out_max": 440,
+        "bal_min": 500,
+        "table_top": 220,
+        "table_bottom": 760,
+        "proximity": 12
     },
     "columns": {
         "trans_date": "Date",
-        "trans_type": "Reference",
-        "credit": "In (R)",
-        "debit": "Out (R)",
-        "bank_fee": "Bank fees (R)",
-        "balance": "Balance (R)"
+        "trans_type": "Description",
+        "debit": "Amount",
+        "balance": "Balance"
     },
     "order": [
         "trans_date",
         "trans_type",
-        "credit",
         "debit",
-        "bank_fee",
         "balance"
     ],
     "cleaning": {
-        "numeric": ["credit", "debit", "bank_fee", "balance"],
         "comma_decimal": true,
-        "merge_wrapped": true,
-        "date": ["trans_date"],
-        "date_format": "%d %b %Y",
-        "dropna": ["balance"]
+        "date_format": "%d %b %Y"
     }
 }
