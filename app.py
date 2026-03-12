@@ -33,7 +33,8 @@ def build_pastel_csv(df):
 
     # Description
     desc_col = [c for c in df.columns if any(k in c.lower() for k in ["description", "reference", "transaction"])][0]
-    pastel_df["Description"] = df[desc_col].fillna("")
+    pastel_df["Description"] = df[desc_col].fillna("").replace("", "Bank Fee/Charge")
+    pastel_df["Description"] = pastel_df["Description"].replace("nan", "Bank Fee/Charge")
 
     # Amount — merge In/Out or Debit/Credit if split into separate columns
     if "Amount" in df.columns:
