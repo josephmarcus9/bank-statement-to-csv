@@ -189,16 +189,14 @@ def to_excel_with_highlights(pastel_df):
         ws = writer.sheets["Transactions"]
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 
-        # Find the Ledger Description column index (1-based in openpyxl)
         ledger_col_idx = list(pastel_df.columns).index("Ledger Description") + 1
 
-        for row_idx in range(2, len(pastel_df) + 2):  # skip header row
+        for row_idx in range(2, len(pastel_df) + 2):
             cell = ws.cell(row=row_idx, column=ledger_col_idx)
             if cell.value and len(str(cell.value)) > PASTEL_MAX_CHARS:
                 for col_idx in range(1, len(pastel_df.columns) + 1):
                     ws.cell(row=row_idx, column=col_idx).fill = yellow_fill
 
-        # Auto-fit column widths
         for col in ws.columns:
             max_len = max(len(str(c.value or "")) for c in col)
             ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 50)
@@ -269,7 +267,6 @@ try:
     # --- Downloads ---
     st.subheader("Download")
     col_csv, col_xlsx = st.columns(2)
-
     file_stem = uploaded_file.name.replace(".pdf", "").replace(".PDF", "")
 
     with col_csv:
