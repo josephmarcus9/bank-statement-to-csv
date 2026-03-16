@@ -6,3 +6,4 @@ pdfplumber
 click
 numpy
 lxml
+openpyxl
