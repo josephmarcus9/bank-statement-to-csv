@@ -385,10 +385,169 @@ def extract_year_from_pdf(filename):
     return None
 
 
+def parse_stdbank_tax_invoice(filename, config):
+    """Parse Standard Bank 'BANK STATEMENT / TAX INVOICE' format using pdfplumber.
+
+    This format has columns: Details | Service Fee | Debits | Credits | Date | Balance
+    with multi-line descriptions, comma-decimal amounts, and MM DD date format.
+    """
+    from collections import defaultdict
+    import re as _re
+
+    col = config.get("pdfplumber_columns", {})
+    desc_max = col.get("desc_max", 240)
+    svc_min = col.get("svc_min", 240)
+    svc_max = col.get("svc_max", 300)
+    debit_min = col.get("debit_min", 300)
+    debit_max = col.get("debit_max", 350)
+    credit_min = col.get("credit_min", 350)
+    credit_max = col.get("credit_max", 405)
+    date_min = col.get("date_min", 405)
+    date_max = col.get("date_max", 435)
+    bal_min = col.get("bal_min", 480)
+    table_top = col.get("table_top", 390)
+    table_bottom = col.get("table_bottom", 650)
+
+    skip_descriptions = {"BALANCE BROUGHT FORWARD", "OPENING BALANCE", "CLOSING BALANCE"}
+
+    def parse_comma_amt(s):
+        """Parse SA comma-decimal amount like '4.600,00-' or '3.967,92'."""
+        if not s:
+            return None
+        s = s.strip()
+        negative = s.endswith("-")
+        if negative:
+            s = s[:-1]
+        s = s.replace(".", "").replace(",", ".")
+        try:
+            val = float(s)
+            return -val if negative else val
+        except (ValueError, TypeError):
+            return None
+
+    all_transactions = []
+
+    with pdfplumber.open(filename) as pdf:
+        for page in pdf.pages:
+            words = page.extract_words(x_tolerance=3, y_tolerance=3)
+            if not words:
+                continue
+
+            # Extract statement year/month from page header
+            page_text = page.extract_text() or ""
+            year_match = _re.search(r"Statement from.*?(\d{4})", page_text)
+            stmt_year = int(year_match.group(1)) if year_match else None
+            # Also look for "DD Month YYYY" at top
+            if not stmt_year:
+                year_match = _re.search(r"\d{1,2}\s+\w+\s+(\d{4})", page_text[:500])
+                if year_match:
+                    stmt_year = int(year_match.group(1))
+
+            # Group words by y-position
+            rows = defaultdict(list)
+            for w in words:
+                if w["top"] < table_top or w["top"] > table_bottom:
+                    continue
+                row_key = round(w["top"])
+                rows[row_key].append(w)
+
+            # Skip header rows
+            sorted_ys = sorted(rows.keys())
+            classified = []
+            for y in sorted_ys:
+                rw = sorted(rows[y], key=lambda w: w["x0"])
+                text_all = " ".join(w["text"] for w in rw)
+
+                # Skip column headers
+                if "Details" in text_all and ("Service" in text_all or "Credits" in text_all):
+                    continue
+                if text_all.strip() in ("Fee", "Debits"):
+                    continue
+                if "##" == text_all.strip() or text_all.startswith("## These fees"):
+                    continue
+
+                desc = " ".join(w["text"] for w in rw if w["x1"] < desc_max).strip()
+                debit_val = " ".join(w["text"] for w in rw if debit_min <= w["x0"] and w["x1"] < debit_max).strip()
+                credit_val = " ".join(w["text"] for w in rw if credit_min <= w["x0"] and w["x1"] < credit_max).strip()
+                date_val = " ".join(w["text"] for w in rw if date_min <= w["x0"] and w["x1"] < date_max).strip()
+                bal_val = " ".join(w["text"] for w in rw if w["x0"] >= bal_min).strip()
+
+                has_amount = bool(debit_val or credit_val)
+                has_balance = bool(bal_val) and any(c.isdigit() for c in bal_val)
+
+                classified.append({
+                    "y": y, "desc": desc, "debit": debit_val, "credit": credit_val,
+                    "date": date_val, "balance": bal_val,
+                    "has_amount": has_amount, "has_balance": has_balance,
+                })
+
+            # Group: balance rows are transactions; non-balance rows AFTER are continuations
+            i = 0
+            while i < len(classified):
+                row = classified[i]
+                if not row["has_balance"]:
+                    i += 1
+                    continue
+
+                # Start with this row's description
+                desc_parts = []
+                if row["desc"]:
+                    desc_parts.append(row["desc"])
+
+                # Look forward for continuation lines (no balance = continuation)
+                k = i + 1
+                while k < len(classified) and not classified[k]["has_balance"]:
+                    if classified[k]["desc"]:
+                        desc_parts.append(classified[k]["desc"])
+                    k += 1
+
+                description = " ".join(desc_parts)
+
+                # Skip excluded rows
+                if any(skip in description.upper() for skip in skip_descriptions):
+                    i = k
+                    continue
+
+                # Parse amount
+                debit = parse_comma_amt(row["debit"])
+                credit = parse_comma_amt(row["credit"])
+                if debit is not None:
+                    amount = -abs(debit) if debit > 0 else debit
+                elif credit is not None:
+                    amount = abs(credit)
+                else:
+                    amount = 0
+
+                # Parse date (MM DD format)
+                date_parsed = None
+                if row["date"] and stmt_year:
+                    parts = row["date"].split()
+                    if len(parts) == 2:
+                        try:
+                            month = int(parts[0])
+                            day = int(parts[1])
+                            date_parsed = pd.Timestamp(year=stmt_year, month=month, day=day)
+                        except (ValueError, TypeError):
+                            pass
+
+                all_transactions.append({
+                    "Date": date_parsed,
+                    "Description": description,
+                    "Amount": amount,
+                })
+
+                i = k  # skip past continuation lines
+
+    return pd.DataFrame(all_transactions)
+
+
 def parse_statement(filename, config):
     # Use pdfplumber-based parser for banks that need y-proximity grouping
     if config.get("use_pdfplumber"):
         return parse_with_pdfplumber(filename, config)
+
+    if config.get("use_pdfplumber_tax_invoice"):
+        return parse_stdbank_tax_invoice(filename, config)
 
     with pdfplumber.open(filename) as pdf:
         num_pages = len(pdf.pages)

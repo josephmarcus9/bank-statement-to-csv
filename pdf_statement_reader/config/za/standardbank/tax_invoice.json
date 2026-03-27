@@ -1,0 +1,17 @@
+{
+    "use_pdfplumber_tax_invoice": true,
+    "pdfplumber_columns": {
+        "desc_max": 240,
+        "svc_min": 240,
+        "svc_max": 300,
+        "debit_min": 300,
+        "debit_max": 350,
+        "credit_min": 350,
+        "credit_max": 405,
+        "date_min": 405,
+        "date_max": 435,
+        "bal_min": 480,
+        "table_top": 390,
+        "table_bottom": 650
+    }
+}

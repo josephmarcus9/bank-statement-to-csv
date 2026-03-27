@@ -12,6 +12,7 @@ BANK_CONFIGS = {
     "ABSA": "za.absa.transaction_history",
     "FNB": "za.fnb.business",
     "Standard Bank": "za.standardbank.current",
+    "Standard Bank (Tax Invoice)": "za.standardbank.tax_invoice",
     "Nedbank": "za.nedbank.cheque",
 }
 
@@ -42,10 +43,17 @@ STRIP_PREFIXES = [
     "STAMPED STATEMENT ",
     "ACB CREDIT ",
     "ACB DEBIT ",
+    # Standard Bank Tax Invoice
+    "MAGTAPE CREDIT ",
+    "MAGTAPE DEBIT ",
+    "BOLSA THIRD PARTY PAYMENT ",
+    "Inward Swift ",
     # FNB
     "Magtape Debit ",
+    "Magtape Credit ",
     "POS Purchase ",
     "Rtc Credit ",
+    "FNB OB Pmt ",
     # Nedbank
     "Instant payment fee",
 ]
@@ -168,6 +176,19 @@ def build_pastel_csv(df):
             if "amount" in c.lower() or "debit" in c.lower()
         ][0]
         pastel_df["Amount"] = df[amt_col]
+
+    # Filter out non-transaction rows
+    skip_patterns = [
+        "BALANCE BROUGHT FORWARD", "OPENING BALANCE", "CLOSING BALANCE",
+        "CARRIED FORWARD", "BROUGHT FORWARD", "PROVISIONAL STATEMENT",
+    ]
+    mask = pastel_df["Description"].apply(
+        lambda d: not any(p in str(d).upper() for p in skip_patterns)
+    )
+    pastel_df = pastel_df[mask].reset_index(drop=True)
+
+    # Drop rows with no valid date
+    pastel_df = pastel_df[pastel_df["Date"].notna() & (pastel_df["Date"] != "NaT")].reset_index(drop=True)
 
     return pastel_df
 
