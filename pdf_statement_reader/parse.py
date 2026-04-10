@@ -410,15 +410,15 @@ def parse_stdbank_tax_invoice(filename, config):
 
     skip_descriptions = {"BALANCE BROUGHT FORWARD", "OPENING BALANCE", "CLOSING BALANCE"}
 
-    def parse_comma_amt(s):
-        """Parse SA comma-decimal amount like '4.600,00-' or '3.967,92'."""
+    def parse_amt(s):
+        """Parse amount like '505.61-' or '4,293.62' (dot-decimal, comma-thousands)."""
         if not s:
             return None
         s = s.strip()
         negative = s.endswith("-")
         if negative:
             s = s[:-1]
-        s = s.replace(".", "").replace(",", ".")
+        s = s.replace(",", "")
         try:
             val = float(s)
             return -val if negative else val
@@ -509,8 +509,8 @@ def parse_stdbank_tax_invoice(filename, config):
                     continue
 
                 # Parse amount
-                debit = parse_comma_amt(row["debit"])
-                credit = parse_comma_amt(row["credit"])
+                debit = parse_amt(row["debit"])
+                credit = parse_amt(row["credit"])
                 if debit is not None:
                     amount = -abs(debit) if debit > 0 else debit
                 elif credit is not None:
