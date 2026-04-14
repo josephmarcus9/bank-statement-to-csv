@@ -4,11 +4,48 @@ import pandas as pd
 import numpy as np
 
 
+def _classify_pages(filename, num_pages):
+    """Classify each page of a multi-statement PDF.
+
+    Returns a list of page types:
+    - 'first': page 1 of a monthly statement (full header)
+    - 'continuation': page 2+ with transactions at the top
+    - 'blank': disclaimer-only or image-based page (no extractable transactions)
+    """
+    page_types = []
+    with pdfplumber.open(filename) as pdf:
+        for i in range(num_pages):
+            text = (pdf.pages[i].extract_text() or "").strip()
+            if not text:
+                page_types.append("blank")
+            elif text.startswith("Transactions in RAND"):
+                page_types.append("continuation")
+            else:
+                page_types.append("first")
+    return page_types
+
+
 def get_raw_df(filename, num_pages, config):
     dfs = []
 
+    has_continuation = "continuation" in config.get("layout", {})
+    if has_continuation:
+        page_types = _classify_pages(filename, num_pages)
+    else:
+        page_types = None
+
     for i in range(num_pages):
-        if i == 0 and "first" in config["layout"]:
+        if has_continuation and page_types[i] == "continuation":
+            area = config["layout"]["continuation"]["area"]
+            columns = config["layout"]["continuation"]["columns"]
+        elif has_continuation and page_types[i] == "blank":
+            continue
+        elif has_continuation and page_types[i] == "first":
+            # Each page 1 of a monthly statement uses the "first" layout
+            layout = config["layout"].get("first", config["layout"]["default"])
+            area = layout["area"]
+            columns = layout["columns"]
+        elif i == 0 and "first" in config["layout"]:
             area = config["layout"]["first"]["area"]
             columns = config["layout"]["first"]["columns"]
         else:
