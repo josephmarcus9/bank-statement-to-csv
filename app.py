@@ -18,6 +18,15 @@ BANK_CONFIGS = {
 
 PASTEL_MAX_CHARS = 36
 
+UNREADABLE_PLACEHOLDER = "[DESCRIPTION UNREADABLE IN PDF - CHECK MANUALLY]"
+
+# Matches a bare card/reference pattern like "428104*6314 12 Mar" — indicates
+# the actual description was not extractable from the PDF text layer.
+_CARD_REF_ONLY_RE = re.compile(
+    r"^\d+\*\d+\s+\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*$",
+    re.IGNORECASE,
+)
+
 # Transaction type prefixes to strip (longest first so longer matches win)
 STRIP_PREFIXES = [
     # Standard Bank
@@ -66,7 +75,7 @@ def clean_description_for_pastel(desc):
     account/card/reference numbers, and trailing dates to keep only
     the meaningful recipient or expense name.
     """
-    if not desc or desc in ("Bank Fee/Charge", "nan", ""):
+    if not desc or desc in ("Bank Fee/Charge", "nan", "", UNREADABLE_PLACEHOLDER):
         return desc
 
     # Strip known transaction type prefixes
@@ -152,15 +161,7 @@ def build_pastel_csv(df):
         for c in df.columns
         if any(k in c.lower() for k in ["description", "reference", "transaction"])
     ][0]
-    pastel_df["Description"] = df[desc_col].fillna("").replace("", "Bank Fee/Charge")
-    pastel_df["Description"] = pastel_df["Description"].replace(
-        "nan", "Bank Fee/Charge"
-    )
-
-    # Ledger Description (cleaned, max 36 chars for Pastel)
-    pastel_df["Ledger Description"] = pastel_df["Description"].apply(
-        clean_description_for_pastel
-    )
+    raw_desc = df[desc_col].fillna("").astype(str).replace("nan", "")
 
     # Amount — merge In/Out or Debit/Credit if split into separate columns
     if "Amount" in df.columns:
@@ -176,6 +177,31 @@ def build_pastel_csv(df):
             if "amount" in c.lower() or "debit" in c.lower()
         ][0]
         pastel_df["Amount"] = df[amt_col]
+
+    # Resolve missing/unreadable descriptions:
+    # - Empty + small negative amount (|amt| < 200) → "Bank Fee/Charge" (typical FNB fee)
+    # - Empty/card-ref-only + anything else → UNREADABLE_PLACEHOLDER (PDF rendering bug)
+    def resolve_description(desc, amount):
+        desc = str(desc).strip()
+        is_card_ref_only = bool(_CARD_REF_ONLY_RE.match(desc))
+        if not desc or is_card_ref_only:
+            try:
+                amt = float(amount)
+            except (ValueError, TypeError):
+                amt = 0
+            if not desc and amt < 0 and abs(amt) < 200:
+                return "Bank Fee/Charge"
+            return UNREADABLE_PLACEHOLDER
+        return desc
+
+    pastel_df["Description"] = [
+        resolve_description(d, a) for d, a in zip(raw_desc, pastel_df["Amount"])
+    ]
+
+    # Ledger Description (cleaned, max 36 chars for Pastel)
+    pastel_df["Ledger Description"] = pastel_df["Description"].apply(
+        clean_description_for_pastel
+    )
 
     # Filter out non-transaction rows
     skip_patterns = [
@@ -193,15 +219,17 @@ def build_pastel_csv(df):
     return pastel_df
 
 
-def highlight_over_limit(row):
-    """Highlight rows yellow where Ledger Description exceeds 36 characters."""
+def highlight_row(row):
+    """Highlight rows: red for unreadable descriptions, yellow for over-limit ledger descriptions."""
+    if str(row["Description"]) == UNREADABLE_PLACEHOLDER:
+        return ["background-color: #FFB3B3"] * len(row)
     if len(str(row["Ledger Description"])) > PASTEL_MAX_CHARS:
         return ["background-color: #FFFF00"] * len(row)
     return [""] * len(row)
 
 
 def to_excel_with_highlights(pastel_df):
-    """Create an Excel file with yellow highlighting for descriptions over 36 chars."""
+    """Create an Excel file with red highlighting for unreadable descriptions and yellow for over-limit rows."""
     from openpyxl.styles import PatternFill
 
     output = BytesIO()
@@ -209,12 +237,18 @@ def to_excel_with_highlights(pastel_df):
         pastel_df.to_excel(writer, index=False, sheet_name="Transactions")
         ws = writer.sheets["Transactions"]
         yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+        red_fill = PatternFill(start_color="FFB3B3", end_color="FFB3B3", fill_type="solid")
 
+        desc_col_idx = list(pastel_df.columns).index("Description") + 1
         ledger_col_idx = list(pastel_df.columns).index("Ledger Description") + 1
 
         for row_idx in range(2, len(pastel_df) + 2):
-            cell = ws.cell(row=row_idx, column=ledger_col_idx)
-            if cell.value and len(str(cell.value)) > PASTEL_MAX_CHARS:
+            desc_cell = ws.cell(row=row_idx, column=desc_col_idx)
+            ledger_cell = ws.cell(row=row_idx, column=ledger_col_idx)
+            if str(desc_cell.value) == UNREADABLE_PLACEHOLDER:
+                for col_idx in range(1, len(pastel_df.columns) + 1):
+                    ws.cell(row=row_idx, column=col_idx).fill = red_fill
+            elif ledger_cell.value and len(str(ledger_cell.value)) > PASTEL_MAX_CHARS:
                 for col_idx in range(1, len(pastel_df.columns) + 1):
                     ws.cell(row=row_idx, column=col_idx).fill = yellow_fill
 
@@ -271,6 +305,15 @@ try:
 
     st.success(f"Extracted **{len(pastel_df)}** transactions from **{bank}** statement.")
 
+    # Count unreadable descriptions (PDF rendering issue — text stored as graphics)
+    n_unreadable = (pastel_df["Description"] == UNREADABLE_PLACEHOLDER).sum()
+    if n_unreadable > 0:
+        st.error(
+            f"**{n_unreadable}** row(s) have descriptions that couldn't be extracted from the PDF "
+            "(highlighted red). These are rendered as graphics in the source PDF — open the PDF "
+            "and type the descriptions in manually. Amounts and dates are correct."
+        )
+
     # Count descriptions over the limit
     over_limit = pastel_df["Ledger Description"].apply(lambda x: len(str(x)) > PASTEL_MAX_CHARS)
     n_over = over_limit.sum()
@@ -282,7 +325,7 @@ try:
 
     # --- Preview with highlighting ---
     st.subheader("Preview")
-    styled = pastel_df.style.apply(highlight_over_limit, axis=1)
+    styled = pastel_df.style.apply(highlight_row, axis=1)
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # --- Downloads ---
