@@ -118,3 +118,7 @@ hs_err_pid*.log
 
 # Data directory
 data/
+
+# Claude Code working files (attachments, skills, settings, plans)
+.claude/
+.context/
